@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"strings"
+	"time"
 
 	"github.com/nlopes/slack"
 )
@@ -14,35 +15,35 @@ var conf config
 var data save
 
 type config struct {
-	Token string `json:"token"`
+	Token     string `json:"token"`
 	ChannelID string `json:"channel_id"`
 }
 
-type save struct{
-	Users map[string]Users
-	DishHistory []DishHistory
+type save struct {
+	Users       map[string]user `json:"users"`
+	DishHistory []dishHistory   `json:"dish_history"`
 }
 
-type User struct{
-	SlackId string `json:"slack_id"`
-	LastCooked string `json:"last_cooked"`
-	LastHelped string `json:"last_helped"`
-	UnavailUntil string `json:"unavail_until"`
+type user struct {
+	SlackID      string    `json:"slack_id"`
+	LastCooked   string    `json:"last_cooked"`
+	LastHelped   string    `json:"last_helped"`
+	UnavailUntil time.Time `json:"unavail_until"`
 }
 
-type DishHistory struct{
+type dishHistory struct {
 	DishName string `json:"dish_name"`
-	Cooked []Cooked
+	Cooked   []cooked
 }
 
-type Cooked struct{
-	CookedBy string `json:"cooked_by"`
-	Date string `json:"date"`
-	Rating string `json:"rating"`
-	Voted string `json:"voted"`
+type cooked struct {
+	CookedBy string            `json:"cooked_by"`
+	Date     time.Time         `json:"date"`
+	Rating   string            `json:"rating"`
+	Voted    map[string]string `json:"voted"`
 }
 
-func loadFromJson(){
+func loadFromJSON() save {
 	b, err := ioutil.ReadFile("save.json")
 	if err != nil {
 		panic(err)
@@ -54,23 +55,26 @@ func loadFromJson(){
 	return save
 }
 
-func saveToJson(){
-	b, err := json.Marshal(&save)
+func saveToJSON() {
+	b, err := json.Marshal(&data)
 	if err != nil {
 		panic(err)
 	}
-	if err := ioutil.WriteFile("save.json", b); err != nil {
+	if err := ioutil.WriteFile("save.json", b, 666); err != nil {
 		panic(err)
 	}
 }
 
-func update(){
-	users := pi.GetUserGroupMembers(conf.ChannelID)
-	for _,user := range users {
-		save.Users[_] =
+func update() {
+	users, err := api.GetUserGroupMembers(conf.ChannelID)
+	if err != nil {
+		panic(err)
+	}
+	for i := range users {
+		//save.Users[_] =
+		fmt.Printf("%#v\n", users[i])
 	}
 }
-
 
 func main() {
 
@@ -124,5 +128,3 @@ func main() {
 	}
 
 }
-
-func 

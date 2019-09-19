@@ -1,23 +1,23 @@
 {
     "users": {
-        "slack_id": {
-            "slack_id": "",
-            "last_cooked": "",
-            "last_helped": "",
-            "unavail_until": ""
+        "[slack_id]": {
+            "slack_id": "[slack_id]",
+            "last_cooked": "[unix timestamp]",
+            "last_helped": "[unix timestamp]",
+            "unavail_until": "[unix timestamp]"
         }
     },
     "dish_histroy": [
         {
-            "dish_name": "",
+            "dish_name": "[dish name]",
             "cooked": [
                 {
-                    "cooked_by": "slack_id",
-                    "date": "",
+                    "cooked_by": "[slack_id]",
+                    "date": "[unix timestamp]",
                     "rating": "",
                     "voted": [
                         {
-                            "slack_id": 0
+                            "[slack_id]": ""[up|down]
                         }
                     ]
                 }
