@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"strings"
 	"time"
 
@@ -32,8 +33,8 @@ type user struct {
 }
 
 type dishHistory struct {
-	DishName string `json:"dish_name"`
-	Cooked   []cooked
+	DishName string   `json:"dish_name"`
+	Cooked   []cooked `json:"cooked"`
 }
 
 type cooked struct {
@@ -43,29 +44,32 @@ type cooked struct {
 	Voted    map[string]string `json:"voted"`
 }
 
-func loadFromJSON() save {
+func loadFromJSON() error {
 	b, err := ioutil.ReadFile("save.json")
-	if err != nil {
-		panic(err)
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
 	}
-	save := save{}
-	if err := json.Unmarshal(b, &save); err != nil {
-		panic(err)
+	if err := json.Unmarshal(b, &data); err != nil {
+		return err
 	}
-	return save
+	return nil
 }
 
-func saveToJSON() {
+func saveToJSON() error {
 	b, err := json.Marshal(&data)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	if err := ioutil.WriteFile("save.json", b, 666); err != nil {
-		panic(err)
+		return err
 	}
+	return nil
 }
 
 func update() {
+	defer saveToJSON()
 	users, err := api.GetUserGroupMembers(conf.ChannelID)
 	if err != nil {
 		panic(err)
@@ -77,6 +81,10 @@ func update() {
 }
 
 func main() {
+	err := loadFromJSON()
+	if err != nil {
+		panic(err)
+	}
 
 	b, err := ioutil.ReadFile("config.json")
 	if err != nil {
