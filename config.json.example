@@ -1,0 +1,5 @@
+{
+    "token": "[bot user auth token]",
+    "group_id": "[kochgruppen group_id]"
+    "cooking_day": "[weekday]"
+}
