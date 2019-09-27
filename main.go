@@ -27,7 +27,7 @@ var daysOfWeek = map[string]time.Weekday{
 
 func parseWeekday(v string) (time.Weekday, error) {
 	if len(v) < 3 {
-		return -1, fmt.Errorf("Invalid weekday (%s) to short")
+		return -1, fmt.Errorf("Invalid weekday (%s) to short", v)
 	}
 	v = strings.ToLower(v[:3])
 	if d, ok := daysOfWeek[v]; ok {
@@ -41,6 +41,7 @@ type config struct {
 	Token      string `json:"token"`
 	GroupID    string `json:"group_id"`
 	CookingDay string `json:"cooking_day"`
+	cookingDay time.Weekday
 }
 
 type save struct {
@@ -69,6 +70,20 @@ func loadFromJSON() error {
 	if err := json.Unmarshal(b, &conf); err != nil {
 		return err
 	}
+	fmt.Println([]byte("[]"))
+
+	if conf.GroupID == "" || (conf.GroupID[0] == 91 && conf.GroupID[len(conf.GroupID)-1] == 93) {
+		return fmt.Errorf("Invalide config: Invalide group_id")
+	}
+
+	if conf.Token == "" || (conf.Token[0] == 91 && conf.Token[len(conf.Token)-1] == 93) {
+		return fmt.Errorf("Invalide config: Invalide token")
+	}
+
+	conf.cookingDay, err = parseWeekday(conf.CookingDay)
+	if err != nil {
+		return fmt.Errorf("Invalide config: %s", err)
+	}
 
 	b, err = ioutil.ReadFile("save.json")
 	if os.IsNotExist(err) {
@@ -80,6 +95,16 @@ func loadFromJSON() error {
 		return err
 	}
 	return nil
+}
+
+func nextCookinDay() time.Time {
+	days := int(conf.cookingDay - time.Now().Weekday())
+	fmt.Println(days)
+	if days < 0 {
+		days = 7 + days
+	}
+	fmt.Println(days)
+	return time.Now().AddDate(0, 0, days)
 }
 
 func saveToJSON() error {
@@ -96,7 +121,7 @@ func saveToJSON() error {
 func update() {
 	defer saveToJSON()
 	if data.DishHistory == nil || len(data.DishHistory) < 1 {
-
+		newDish()
 	}
 	fmt.Printf("%#v\n", data.DishHistory)
 	fmt.Println(conf.GroupID)
@@ -117,7 +142,7 @@ func update() {
 }
 
 func newDish() {
-	date := time.Now().Weekday
+
 }
 
 func main() {
@@ -125,6 +150,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	d := nextCookinDay()
+	fmt.Println(d)
+	fmt.Println(conf.cookingDay)
+	fmt.Println(d.Weekday())
+	panic(nil)
 
 	api = slack.New(conf.Token)
 	if api == nil {
@@ -132,7 +162,7 @@ func main() {
 	}
 	resp, err := api.AuthTest()
 	if err != nil {
-		panic(err)
+		panic(fmt.Errorf("Invalide Auth: %s", err))
 	}
 	if resp == nil {
 		panic("Empty auth test response")
