@@ -14,6 +14,8 @@ import (
 var api *slack.Client
 var conf config
 var data save
+var currentDish *dish
+var now = time.Now
 
 var daysOfWeek = map[string]time.Weekday{
 	"sun": time.Sunday,
@@ -45,16 +47,13 @@ type config struct {
 }
 
 type save struct {
-	DishHistory []dishHistory `json:"dish_history"`
+	DishHistory []dish `json:"dish_history"`
 }
 
-type dishHistory struct {
-	DishName string   `json:"dish_name"`
-	Cooked   []cooked `json:"cooked"`
-}
-
-type cooked struct {
+type dish struct {
+	DishName string            `json:"dish_name"`
 	CookedBy string            `json:"cooked_by"`
+	Helped   string            `json:"helped"`
 	Date     time.Time         `json:"date"`
 	Rating   string            `json:"rating"`
 	Voted    map[string]string `json:"voted"`
@@ -97,14 +96,16 @@ func loadFromJSON() error {
 	return nil
 }
 
+func setTime(date time.Time, hour, min, sec, nsec int) time.Time {
+	return time.Date(date.Year(), date.Month(), date.Day(), hour, min, sec, nsec, date.Location())
+}
+
 func nextCookinDay() time.Time {
-	days := int(conf.cookingDay - time.Now().Weekday())
-	fmt.Println(days)
-	if days < 0 {
-		days = 7 + days
+	cookingDate := setTime(now(), 12, 0, 0, 0).AddDate(0, 0, int(conf.cookingDay-now().Weekday()))
+	for cookingDate.AddDate(0, 0, -1).Before(now()) {
+		cookingDate = cookingDate.AddDate(0, 0, 7)
 	}
-	fmt.Println(days)
-	return time.Now().AddDate(0, 0, days)
+	return cookingDate
 }
 
 func saveToJSON() error {
@@ -120,8 +121,25 @@ func saveToJSON() error {
 
 func update() {
 	defer saveToJSON()
-	if data.DishHistory == nil || len(data.DishHistory) < 1 {
-		newDish()
+	var lastDish *dish
+	for i := range data.DishHistory {
+		if lastDish == nil || lastDish.Date.Before(data.DishHistory[i].Date) {
+			lastDish = &data.DishHistory[i]
+		}
+	}
+
+	if lastDish == nil {
+		cookingDate := nextCookinDay()
+		startDate := cookingDate.AddDate(0, 0, -3)
+		if startDate.After(now()) {
+			newDish(cookingDate)
+		} else {
+			cookingTimer := time.NewTimer(startDate.Sub(now()))
+			go func() {
+				<-cookingTimer.C
+				newDish(cookingDate)
+			}()
+		}
 	}
 	fmt.Printf("%#v\n", data.DishHistory)
 	fmt.Println(conf.GroupID)
@@ -141,7 +159,7 @@ func update() {
 	}
 }
 
-func newDish() {
+func newDish(cookingDate time.Time) {
 
 }
 
