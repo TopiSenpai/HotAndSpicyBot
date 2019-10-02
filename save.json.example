@@ -8,7 +8,7 @@
             "rating": "",
             "voted": [
                 {
-                    "[slack_id]": "[up|down]"
+                    "[slack_id]": "[true|false]"
                 }
             ]
         }
