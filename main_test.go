@@ -63,7 +63,7 @@ func Test_nextCookinDay(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			now = func() cookingTime { return cookingTime{time: tt.now} }
+			now = func() cookingTime { return cookingTime{Time: tt.now} }
 			conf.cookingDay = tt.cookingDay
 			if got := nextCookinDay(); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("nextCookinDay() = %v, want %v", got, tt.want)
