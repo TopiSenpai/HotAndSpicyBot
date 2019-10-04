@@ -15,7 +15,7 @@ var api *slack.Client
 var conf config
 var data save
 var currentDish *dish
-var now = time.Now
+var now = func() cookingTime { return cookingTime{Time: time.Now(), set: true} }
 
 var daysOfWeek = map[string]time.Weekday{
 	"sun": time.Sunday,
@@ -54,9 +54,14 @@ type dish struct {
 	DishName string          `json:"dish_name"`
 	CookedBy string          `json:"cooked_by"`
 	Helped   string          `json:"helped"`
-	Date     time.Time       `json:"date"`
+	Date     cookingTime     `json:"date"`
 	Rating   string          `json:"rating"`
 	Voted    map[string]bool `json:"voted"`
+}
+
+type cookingTime struct {
+	time.Time
+	set bool
 }
 
 func loadFromJSON() error {
@@ -96,14 +101,17 @@ func loadFromJSON() error {
 	return nil
 }
 
-func setTime(date time.Time, hour, min, sec, nsec int) time.Time {
-	return time.Date(date.Year(), date.Month(), date.Day(), hour, min, sec, nsec, date.Location())
+func TodayAt(hour, min, sec, nsec int) cookingTime {
+	today := now()
+	today.Time = time.Date(today.Year(), today.Month(), today.Day(), hour, min, sec, nsec, today.Location())
+	return today
 }
 
-func nextCookinDay() time.Time {
-	cookingDate := setTime(now(), 12, 0, 0, 0).AddDate(0, 0, int(conf.cookingDay-now().Weekday()))
-	for cookingDate.AddDate(0, 0, -1).Before(now()) {
-		cookingDate = cookingDate.AddDate(0, 0, 7)
+func nextCookinDay() cookingTime {
+	cookingDate := TodayAt(12, 0, 0, 0)
+	cookingDate.Time = cookingDate.AddDate(0, 0, int(conf.cookingDay-now().Weekday()))
+	for cookingDate.AddDate(0, 0, -1).Before(now().Time) {
+		cookingDate.Time = cookingDate.AddDate(0, 0, 7)
 	}
 	return cookingDate
 }
@@ -121,62 +129,64 @@ func saveToJSON() error {
 
 func update() error {
 	defer saveToJSON()
-	var lastDish *dish
-	for i := range data.DishHistory {
-		if lastDish == nil || lastDish.Date.Before(data.DishHistory[i].Date) {
-			lastDish = &data.DishHistory[i]
+	if currentDish == nil {
+		var lastDish *dish
+		for i := range data.DishHistory {
+			if lastDish == nil || lastDish.Date.Before(data.DishHistory[i].Date.Time) {
+				lastDish = &data.DishHistory[i]
+			}
+		}
+		if lastDish == nil || lastDish.Rating != "" {
+			cookingDate := nextCookinDay()
+			if cookingDate.AddDate(0, 0, -3).After(now().Time) {
+				group, err := api.GetGroupInfo(conf.GroupID)
+				if err != nil {
+					return err
+				}
+				newDish := dish{Date: cookingDate}
+				altHelper := ""
+				lastCook := map[string]cookingTime{}
+				lastHelp := map[string]cookingTime{}
+				for i := range data.DishHistory {
+					if date := lastCook[data.DishHistory[i].CookedBy]; !date.set || date.Before(data.DishHistory[i].Date.Time) {
+						lastCook[data.DishHistory[i].CookedBy] = data.DishHistory[i].Date
+					}
+					if date := lastCook[data.DishHistory[i].Helped]; !date.set || date.Before(data.DishHistory[i].Date.Time) {
+						lastCook[data.DishHistory[i].Helped] = data.DishHistory[i].Date
+					}
+				}
+				for i := range group.Members {
+					user := group.Members[i]
+					if newCookLastDate := lastCook[user]; newDish.CookedBy == "" {
+						newDish.CookedBy = user
+					} else if currentCookLastDate := lastCook[newDish.CookedBy]; !newCookLastDate.set || (currentCookLastDate.set && newCookLastDate.Before(currentCookLastDate.Time)) {
+						newDish.CookedBy = user
+					}
+					if newHelperLastDate, newHelperOk := lastHelp[user]; user == newDish.CookedBy {
+
+					}
+					if newHelperLastDate, newHelperOk := lastHelp[user]; true {
+
+					}
+				}
+			}
+		} else {
+			currentDish = lastDish
 		}
 	}
-
-	if lastDish == nil || lastDish.Rating != "" {
-		cookingDate := nextCookinDay()
-		if cookingDate.AddDate(0, 0, -3).After(now()) {
-			group, err := api.GetGroupInfo(conf.GroupID)
-			if err != nil {
-				return err
-			}
-			newDish := dish{Date: cookingDate}
-			altHelper := ""
-			lastCook := map[string]time.Time{}
-			lastHelp := map[string]time.Time{}
-			for i := range data.DishHistory {
-				if date, ok := lastCook[data.DishHistory[i].CookedBy]; !ok || date.Before(data.DishHistory[i].Date) {
-					lastCook[data.DishHistory[i].CookedBy] = data.DishHistory[i].Date
-				}
-				if date, ok := lastCook[data.DishHistory[i].Helped]; !ok || date.Before(data.DishHistory[i].Date) {
-					lastCook[data.DishHistory[i].Helped] = data.DishHistory[i].Date
-				}
-			}
-			for i := range group.Members {
-				user := group.Members[i]
-				if newCookLastDate, newCookOk := lastCook[user]; newDish.CookedBy == "" {
-					newDish.CookedBy = user
-				} else if currentCookLastDate, currentCookOk := lastCook[newDish.CookedBy]; !newCookOk || (currentCookOk && newCookLastDate.Before(currentCookLastDate)) {
-					newDish.CookedBy = user
-				}
-				if newHelperLastDate, newHelperOk := lastHelp[user]; user == newDish.CookedBy{
-					
-				}
-				if newHelperLastDate, newHelperOk := lastHelp[user];  {
-					
-				}
-			}
-
-			//newDish(cookingDate)
-		}
-	} else if lastDish.Voted == nil && lastDish.Date.Add(2*time.Hour).After(now()) {
+	if currentDish.Voted == nil && currentDish.Date.Add(2*time.Hour).After(now().Time) {
 		api.SendMessage(conf.GroupID, slack.MsgOptionText("Wie hat euch das essen geschmeckt bite stimmt mit :thumbsup: und :thumbsdown: ab.", false))
 		currentDish.Voted = map[string]bool{}
-	} else if lastDish.Voted != nil && lastDish.Date.AddDate(0, 0, 2).After(now()) {
+	} else if currentDish.Voted != nil && currentDish.Date.AddDate(0, 0, 2).After(now().Time) {
 		up := 0
-		for i := range lastDish.Voted {
-			if lastDish.Voted[i] {
+		for i := range currentDish.Voted {
+			if currentDish.Voted[i] {
 				up++
 			}
 		}
-		lastDish.Rating = fmt.Sprintf("%d/%d", up, len(lastDish.Voted))
-		lastDish.Voted = nil
-		api.SendMessage(conf.GroupID, slack.MsgOptionText(fmt.Sprintf("Abstimmung ist abgeschlossen Ergebnis ist: %s.", lastDish.Rating), false))
+		currentDish.Rating = fmt.Sprintf("%d/%d", up, len(currentDish.Voted))
+		currentDish.Voted = nil
+		api.SendMessage(conf.GroupID, slack.MsgOptionText(fmt.Sprintf("Abstimmung ist abgeschlossen Ergebnis ist: %s.", currentDish.Rating), false))
 	}
 	fmt.Printf("%#v\n", data.DishHistory)
 	fmt.Println(conf.GroupID)
