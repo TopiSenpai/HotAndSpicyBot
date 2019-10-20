@@ -4,18 +4,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nlopes/slack"
 )
 
 var api *slack.Client
+var bot string
 var conf config
 var data save
+var saveFile = "save.json"
+var dishLook = sync.Mutex{}
 var currentDish *dish
-var now = func() cookingTime { return cookingTime{Time: time.Now(), set: true} }
+var votingDish *dish
+var futureDish *dish
+var userRegex = regexp.MustCompile("<@([A-Z0-9]+)>")
 
 var daysOfWeek = map[string]time.Weekday{
 	"sun": time.Sunday,
@@ -25,6 +33,12 @@ var daysOfWeek = map[string]time.Weekday{
 	"thu": time.Thursday,
 	"fri": time.Friday,
 	"sat": time.Saturday,
+	"son": time.Sunday,
+	"die": time.Tuesday,
+	"mit": time.Wednesday,
+	"don": time.Thursday,
+	"fre": time.Friday,
+	"sam": time.Saturday,
 }
 
 var wochentage = map[time.Weekday]string{
@@ -78,7 +92,7 @@ type dish struct {
 	DishName string          `json:"dish_name"`
 	Cook     string          `json:"cook"`
 	Helper   string          `json:"helper"`
-	Date     cookingTime     `json:"date"`
+	Date     time.Time       `json:"date"`
 	Rating   string          `json:"rating"`
 	Voted    map[string]bool `json:"voted"`
 }
@@ -102,7 +116,6 @@ func loadFromJSON() error {
 	if err := json.Unmarshal(b, &conf); err != nil {
 		return err
 	}
-	fmt.Println([]byte("[]"))
 
 	if conf.GroupID == "" || (conf.GroupID[0] == 91 && conf.GroupID[len(conf.GroupID)-1] == 93) {
 		return fmt.Errorf("Invalide config: Invalide group_id")
@@ -117,7 +130,7 @@ func loadFromJSON() error {
 		return fmt.Errorf("Invalide config: %s", err)
 	}
 
-	b, err = ioutil.ReadFile("save.json")
+	b, err = ioutil.ReadFile(saveFile)
 	if os.IsNotExist(err) {
 		return nil
 	} else if err != nil {
@@ -129,12 +142,12 @@ func loadFromJSON() error {
 	return nil
 }
 
-func nextCookinDay() cookingTime {
-	cookingDate := now()
-	cookingDate.Time = time.Date(cookingDate.Year(), cookingDate.Month(), cookingDate.Day(), 12, 0, 0, 0, cookingDate.Location())
-	cookingDate.Time = cookingDate.AddDate(0, 0, int(conf.cookingDay-now().Weekday()))
-	for cookingDate.AddDate(0, 0, -1).Before(now().Time) {
-		cookingDate.Time = cookingDate.AddDate(0, 0, 7)
+func next(w time.Weekday) time.Time {
+	cookingDate := time.Now()
+	cookingDate = time.Date(cookingDate.Year(), cookingDate.Month(), cookingDate.Day(), 12, 0, 0, 0, cookingDate.Location())
+	cookingDate = cookingDate.AddDate(0, 0, int(w-time.Now().Weekday()))
+	for cookingDate.AddDate(0, 0, -1).Before(time.Now()) {
+		cookingDate = cookingDate.AddDate(0, 0, 7)
 	}
 	return cookingDate
 }
@@ -144,85 +157,94 @@ func saveToJSON() error {
 	if err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile("save.json", b, 777); err != nil {
+	if err := ioutil.WriteFile(saveFile, b, 0644); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *dish) start() error {
+	if d.Cook == "" || d.Helper == "" {
+		group, err := api.GetGroupInfo(conf.GroupID)
+		if err != nil {
+			return err
+		}
+		lastCook := map[string]cookingTime{}
+		lastHelp := map[string]cookingTime{}
+		for i := range data.DishHistory {
+			if date := lastCook[data.DishHistory[i].Cook]; !date.set || date.Before(data.DishHistory[i].Date) {
+				lastCook[data.DishHistory[i].Cook] = cookingTime{Time: data.DishHistory[i].Date, set: true}
+			}
+			if date := lastCook[data.DishHistory[i].Helper]; !date.set || date.Before(data.DishHistory[i].Date) {
+				lastCook[data.DishHistory[i].Helper] = cookingTime{Time: data.DishHistory[i].Date, set: true}
+			}
+		}
+		cook := d.Cook
+		helper := d.Helper
+		altHelper := ""
+		for i := range group.Members {
+			user := group.Members[i]
+			if user == "" || user == bot {
+				continue
+			}
+
+			if d.Cook == "" && (cook == "" || lastCook[user].before(lastCook[d.Cook])) {
+				cook = user
+			}
+
+			if d.Helper == "" && (helper == "" || lastHelp[user].before(lastHelp[d.Helper])) {
+				if helper != "" && (altHelper == "" || lastHelp[helper].before(lastHelp[altHelper])) {
+					altHelper = helper
+				}
+				helper = user
+			} else if d.Helper == "" && (altHelper == "" || lastHelp[user].before(lastHelp[altHelper])) {
+				altHelper = user
+			}
+		}
+		d.Cook = cook
+		d.Helper = helper
+		if d.Cook == d.Helper {
+			d.Helper = altHelper
+		}
+	}
+	_, _, _, err := api.SendMessage(conf.GroupID, slack.MsgOptionText(fmt.Sprintf("Am %s den %d. %s kocht <@%s> und <@%s> hilft.", wochentage[d.Date.Weekday()], d.Date.Day(), monate[d.Date.Month()], d.Cook, d.Helper), false))
+	if err != nil {
+		return err
+	}
+	_, _, _, err = api.SendMessage(conf.GroupID, slack.MsgOptionText(fmt.Sprintf("<@%s> was möchtest du kochen?", d.Cook), false))
+	if err != nil {
 		return err
 	}
 	return nil
 }
 
 func update() error {
+	dishLook.Lock()
+	defer dishLook.Unlock()
 	defer saveToJSON()
+
 	if currentDish == nil {
 		var lastDish *dish
 		for i := range data.DishHistory {
-			if lastDish == nil || lastDish.Date.Before(data.DishHistory[i].Date.Time) {
+			if lastDish == nil || lastDish.Date.Before(data.DishHistory[i].Date) {
 				lastDish = &data.DishHistory[i]
 			}
 		}
 		if lastDish == nil || lastDish.Rating != "" {
-			cookingDate := nextCookinDay()
-			if cookingDate.AddDate(0, 0, -3).After(now().Time) {
-				group, err := api.GetGroupInfo(conf.GroupID)
-				if err != nil {
-					return err
-				}
-				lastCook := map[string]cookingTime{}
-				lastHelp := map[string]cookingTime{}
-				for i := range data.DishHistory {
-					if date := lastCook[data.DishHistory[i].Cook]; !date.set || date.Before(data.DishHistory[i].Date.Time) {
-						lastCook[data.DishHistory[i].Cook] = data.DishHistory[i].Date
-					}
-					if date := lastCook[data.DishHistory[i].Helper]; !date.set || date.Before(data.DishHistory[i].Date.Time) {
-						lastCook[data.DishHistory[i].Helper] = data.DishHistory[i].Date
-					}
-				}
-				altHelper := ""
-				newDish := dish{Date: cookingDate}
-				for i := range group.Members {
-					user := group.Members[i]
-					if user == "" {
-						continue
-					}
-
-					if newDish.Cook == "" || lastCook[user].before(lastCook[newDish.Cook]) {
-						newDish.Cook = user
-					}
-
-					if newDish.Helper == "" || lastHelp[user].before(lastHelp[newDish.Helper]) {
-						if newDish.Helper != "" && (altHelper == "" || lastHelp[newDish.Helper].before(lastHelp[altHelper])) {
-							altHelper = newDish.Helper
-						}
-						newDish.Helper = user
-					} else if altHelper == "" || lastHelp[user].before(lastHelp[altHelper]) {
-						altHelper = user
-					}
-				}
-				if newDish.Cook == newDish.Helper {
-					newDish.Helper = altHelper
-				}
-				_, _, _, err = api.SendMessage(conf.GroupID, slack.MsgOptionText(fmt.Sprintf("Am %s den %d. %s kocht <@%s> und <@%s> hilft.", wochentage[newDish.Date.Weekday()], newDish.Date.Day(), monate[newDish.Date.Month()], newDish.Cook, newDish.Helper), false))
-				if err != nil {
-					return err
-				}
-				_, _, _, err = api.SendMessage(conf.GroupID, slack.MsgOptionText(fmt.Sprintf("<@%s> was möchtest du kochen?", newDish.Cook), false))
-				if err != nil {
-					return err
-				}
-				data.DishHistory = append(data.DishHistory, newDish)
-				currentDish = &data.DishHistory[len(data.DishHistory)-1]
-			}
+			data.DishHistory = append(data.DishHistory, dish{Date: next(conf.cookingDay)})
+			currentDish = &data.DishHistory[len(data.DishHistory)-1]
 		} else {
 			currentDish = lastDish
 		}
 	}
 	if currentDish != nil {
-		if currentDish.Voted == nil && currentDish.Date.Add(2*time.Hour).After(now().Time) {
+		if currentDish.Voted == nil && time.Now().After(currentDish.Date.Add(2*time.Hour)) {
 			_, _, _, err := api.SendMessage(conf.GroupID, slack.MsgOptionText("Wie hat euch das essen geschmeckt bite stimmt mit :thumbsup: und :thumbsdown: ab.", false))
 			if err != nil {
 				return err
 			}
 			currentDish.Voted = map[string]bool{}
-		} else if currentDish.Voted != nil && currentDish.Date.AddDate(0, 0, 2).After(now().Time) {
+		} else if currentDish.Voted != nil && time.Now().After(currentDish.Date.AddDate(0, 0, 2)) {
 			up := 0
 			for i := range currentDish.Voted {
 				if currentDish.Voted[i] {
@@ -235,15 +257,91 @@ func update() error {
 			if err != nil {
 				return err
 			}
+			currentDish = nil
+		} else if time.Now().After(currentDish.Date.AddDate(0, 0, -3)) && (currentDish.Cook == "" || currentDish.Helper == "") {
+			return currentDish.start()
 		}
 	}
 	return nil
 }
 
-func newDish(cookingDate time.Time) {
+func handleChangeMsg(user, args string) string {
+	dishLook.Lock()
+	defer dishLook.Unlock()
+	defer saveToJSON()
 
+	if currentDish == nil {
+		data.DishHistory = append(data.DishHistory, dish{Date: next(conf.cookingDay)})
+		currentDish = &data.DishHistory[len(data.DishHistory)-1]
+	}
+
+	fmt.Println(args)
+
+	if strings.HasPrefix(args, "ich koche") {
+		currentDish.Cook = user
+		args = strings.Trim(strings.TrimPrefix(args, "ich koche"), " ")
+		if strings.HasPrefix(args, "am") {
+			args = strings.TrimPrefix(args, "am")
+			if weekday, err := parseWeekday(strings.Trim(args, " ")); err == nil {
+				currentDish.Date = next(weekday)
+			} else {
+				return "Entschuldige ich habe den Wochentag nicht verstanden."
+			}
+		} else if args != "" {
+			currentDish.DishName = args
+		}
+		msg := fmt.Sprintf("<@%s> kocht am %d %s", currentDish.Cook, currentDish.Date.Day(), currentDish.Date.Month())
+		if currentDish.DishName != "" {
+			msg += " " + currentDish.DishName
+		}
+		return msg + "."
+
+	} else if strings.Contains(args, "ich helfe") {
+		if currentDish.Cook != user {
+			currentDish.Helper = user
+			return fmt.Sprintf("<@%s> hilft.", currentDish.Helper)
+		} else {
+			return fmt.Sprintf("<@%s> du kannst nicht helfen du kochst.", user)
+		}
+	} else if found := userRegex.FindStringSubmatch(args); len(found) == 2 {
+		args := strings.Trim(strings.TrimPrefix(args, found[0]), " ")
+		if args == "kocht" {
+			currentDish.Cook = found[1]
+		} else if args == "hilft" {
+			if currentDish.Cook != found[1] {
+				currentDish.Helper = found[1]
+			} else {
+				return fmt.Sprintf("<@%s> du kannst nicht helfen du kochst.", found[1])
+			}
+		} else {
+			return "Das habe ich nicht verstanden."
+		}
+		return "ok"
+
+	} else if strings.Contains(args, "fällt aus") {
+		date := next(conf.cookingDay)
+		for !date.After(currentDish.Date) {
+			date = date.AddDate(0, 0, 7)
+		}
+		currentDish.Date = date
+		return fmt.Sprintf("schade!\nich habe es auf den %d %s verschoben.", date.Day(), date.Month())
+	} else if strings.Contains(args, ":thumbsup:") || strings.Contains(args, ":+1:") {
+		if currentDish.Voted != nil {
+			currentDish.Voted[user] = true
+			return "ok"
+		}
+		return "Aktuell findet keine Abstimmung ab"
+	} else if strings.Contains(args, ":thumbsdown:") || strings.Contains(args, ":-1:") {
+		if currentDish.Voted != nil {
+			currentDish.Voted[user] = false
+			return "ok"
+		}
+		return "Aktuell findet keine Abstimmung ab"
+	} else {
+		fmt.Println(found)
+		return "benutze:\nwer kocht?\nwas wird gekocht?\nwann wird gekocht?\nich koche.\nich koche am Montag/Dienstag/Mitwoch/Donnerstag/Freitag.\nich kochen Nudeln mit Tomatensoße.\n<@user> kocht.\n<@user> hilft.\ndieses mal fällt aus"
+	}
 }
-
 func main() {
 	err := loadFromJSON()
 	if err != nil {
@@ -259,7 +357,7 @@ func main() {
 	if resp == nil {
 		panic("Empty auth test response")
 	}
-
+	bot = resp.UserID
 	prefix := "<@" + resp.UserID + ">"
 
 	fmt.Println("Hot & Spicy Bot starting...")
@@ -271,12 +369,18 @@ func main() {
 
 	fmt.Println(prefix)
 
-	update()
+	err = update()
+	if err != nil {
+		log.Println(err)
+	}
 
 	go func() {
 		t := time.NewTicker(5 * time.Minute)
 		for _ = range t.C {
-			update()
+			err := update()
+			if err != nil {
+				log.Println(err)
+			}
 		}
 	}()
 
@@ -284,19 +388,35 @@ func main() {
 		//fmt.Print("Event Received: ")
 		switch ev := msg.Data.(type) {
 		case *slack.MessageEvent:
+			fmt.Printf("ev: %#v\n", ev)
 			if !strings.HasPrefix(ev.Msg.Text, prefix) {
 				//fmt.Println("Message NOT for me: '" + ev.Text + "'")
 				continue
 			}
 			fmt.Println("Message for me: '" + ev.Text + "'")
-			args := strings.ToLower(strings.TrimPrefix(ev.Text, prefix))
+			args := strings.Trim(strings.TrimPrefix(ev.Text, prefix), " !?.")
 
+			//Questions
 			if strings.Contains(args, "wer kocht") {
-				if currentDish == nil {
+				if currentDish == nil || currentDish.Cook == "" {
 					api.SendMessage(ev.Channel, slack.MsgOptionText("Aktuell niemand.", false))
+				} else {
+					msg := fmt.Sprintf("<@%s> kocht", currentDish.Cook)
+					if currentDish.Helper != "" {
+						msg += fmt.Sprintf(" und <@%s> hilft", currentDish.Helper)
+					}
+					api.SendMessage(ev.Channel, slack.MsgOptionText(msg+".", false))
+				}
+				break
+
+			} else if strings.Contains(args, "wann wird gekocht") {
+				if currentDish == nil {
+					api.SendMessage(ev.Channel, slack.MsgOptionText("Aktuell nicht.", false))
 				} else {
 					api.SendMessage(ev.Channel, slack.MsgOptionText(fmt.Sprintf("<@%s> kocht und <@%s> hilft.", currentDish.Cook, currentDish.Helper), false))
 				}
+				break
+
 			} else if strings.Contains(args, "was wird gekocht") {
 				if currentDish == nil {
 					api.SendMessage(ev.Channel, slack.MsgOptionText("Aktuell nichts.", false))
@@ -305,11 +425,9 @@ func main() {
 				} else {
 					api.SendMessage(ev.Channel, slack.MsgOptionText(fmt.Sprintf("<@%s> hat noch nicht gesagt was er kochen möchte.", currentDish.Cook), false))
 				}
-			} else if strings.Contains(args, "gerichte") {
-				api.SendMessage(ev.Channel, slack.MsgOptionText("test", false))
-			} else {
-				api.SendMessage(ev.Channel, slack.MsgOptionText("benutze:\n●wer kocht\n●was wird gekocht\n●Gerichte\n●@user kann nicht\n●nächste Woche fällt aus", false))
+				break
 			}
+			api.SendMessage(ev.Channel, slack.MsgOptionText(handleChangeMsg(ev.User, args), false))
 
 		case *slack.RTMError:
 			fmt.Printf("Error: %s\n", ev.Error())

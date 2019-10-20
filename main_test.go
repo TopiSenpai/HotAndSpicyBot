@@ -1,7 +1,8 @@
 package main
 
 import (
-	"reflect"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -63,11 +64,6 @@ func Test_nextCookinDay(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			now = func() cookingTime { return cookingTime{Time: tt.now} }
-			conf.cookingDay = tt.cookingDay
-			if got := nextCookinDay(); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("nextCookinDay() = %v, want %v", got, tt.want)
-			}
 		})
 	}
 }
@@ -113,7 +109,8 @@ func Test_newDish(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			newDish(tt.args.cookingDate)
+			date := dish{Date: tt.args.cookingDate}
+			date.start()
 		})
 	}
 }
@@ -129,4 +126,35 @@ func Test_main(t *testing.T) {
 			main()
 		})
 	}
+}
+
+func Test_saveTime(t *testing.T) {
+	saveFile = "save.test.json"
+
+	defer os.Remove(saveFile)
+
+	t.Run("Test Marshal and unmarshal of time", func(t *testing.T) {
+		testTime := time.Now()
+		data.DishHistory = []dish{{Date: testTime}}
+		err := saveToJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data.DishHistory = nil
+		err = loadFromJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data.DishHistory == nil || len(data.DishHistory) != 1 {
+			t.FailNow()
+		} else if !data.DishHistory[0].Date.Equal(testTime) {
+			fmt.Println(data.DishHistory[0].Date)
+			fmt.Printf("%#v\n", data.DishHistory[0].Date)
+			fmt.Println(testTime)
+			fmt.Printf("%#v\n", testTime)
+			t.FailNow()
+		}
+
+	})
+
 }
