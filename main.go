@@ -211,9 +211,11 @@ func (d *dish) start() error {
 	if err != nil {
 		return err
 	}
-	_, _, _, err = api.SendMessage(conf.GroupID, slack.MsgOptionText(fmt.Sprintf("<@%s> was möchtest du kochen?", d.Cook), false))
-	if err != nil {
-		return err
+	if d.DishName == "" {
+		_, _, _, err = api.SendMessage(conf.GroupID, slack.MsgOptionText(fmt.Sprintf("<@%s> was möchtest du kochen?", d.Cook), false))
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
