@@ -241,7 +241,7 @@ func update() error {
 	}
 	if currentDish != nil {
 		if currentDish.Voted == nil && time.Now().After(currentDish.Date.Add(2*time.Hour)) {
-			_, _, _, err := api.SendMessage(conf.GroupID, slack.MsgOptionText("Wie hat euch das essen geschmeckt bite stimmt mit :thumbsup: und :thumbsdown: ab.", false))
+			_, _, _, err := api.SendMessage(conf.GroupID, slack.MsgOptionText("Wie hat euch das essen geschmeckt bitte stimmt mit :thumbsup: und :thumbsdown: ab.", false))
 			if err != nil {
 				return err
 			}
