@@ -61,7 +61,7 @@ var monate = map[time.Month]string{
 	time.July:      "July",
 	time.August:    "August",
 	time.September: "September",
-	time.November:  "Novembwer",
+	time.November:  "November",
 	time.December:  "Dezember",
 }
 
