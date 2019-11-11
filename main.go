@@ -292,7 +292,7 @@ func handleChangeMsg(user, args string) string {
 		} else if args != "" {
 			currentDish.DishName = args
 		}
-		msg := fmt.Sprintf("<@%s> kocht am %d %s", currentDish.Cook, currentDish.Date.Day(), currentDish.Date.Month())
+		msg := fmt.Sprintf("<@%s> kocht am %d %s", currentDish.Cook, currentDish.Date.Day(), monate[currentDish.Date.Month()])
 		if currentDish.DishName != "" {
 			msg += " " + currentDish.DishName
 		}
